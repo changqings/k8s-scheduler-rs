@@ -59,8 +59,11 @@ async fn main() -> anyhow::Result<()> {
                     )
                     .await;
                 match res {
-                    Ok(_p) => {
-                        println!("Successfully assigned Pod {} to Node {}", name, node_name);
+                    Ok(s) => {
+                        println!(
+                            "Successfully assigned Pod {} to Node {}, status={:?}",
+                            name, node_name, s.status
+                        );
                     }
                     Err(e) => {
                         println!(
