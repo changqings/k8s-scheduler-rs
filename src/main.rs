@@ -1,28 +1,31 @@
 use futures::{StreamExt, TryStreamExt};
 use k8s_openapi::api::core::v1::Binding;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Status;
+use kube::ResourceExt;
 use kube::api::PostParams;
 use kube::api::WatchEvent;
 use kube::api::WatchParams;
-use kube::ResourceExt;
 use kube::{Api, Client};
+use tracing_subscriber::FmtSubscriber;
 
 use k8s_openapi::api::core::v1::Pod;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // 创建 Kubernetes 客户端
-    let client = Client::try_default().await?;
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(tracing::Level::DEBUG)
+        .finish();
 
-    //
+    tracing::subscriber::set_global_default(subscriber).expect("Failed to set subscriber");
+
+    let client = Client::try_default().await?;
     let k8s_scheduler_rs = "my-scheduler";
 
-    // 获取 Pod 和 Node 的 API 对象
     let pods: Api<Pod> = Api::all(client.clone());
 
     let watch_fileds = "status.phase=Pending,spec.schedulerName=".to_string() + k8s_scheduler_rs;
     let watch_params = WatchParams::default().fields(&watch_fileds);
 
-    // 监听未调度的 Pod
     let mut stream = pods.watch(&watch_params, "0").await?.boxed();
 
     let node_name = "xx";
@@ -47,8 +50,8 @@ async fn main() -> anyhow::Result<()> {
                     },
                 };
 
-                let res: Result<Pod, kube::Error> = pod_bind
-                    .create_subresource::<Pod>(
+                let res: Result<Status, kube::Error> = pod_bind
+                    .create_subresource(
                         "binding",
                         &name,
                         &PostParams::default(),
@@ -60,12 +63,16 @@ async fn main() -> anyhow::Result<()> {
                         println!("Successfully assigned Pod {} to Node {}", name, node_name);
                     }
                     Err(e) => {
-                        println!("Failed to assign Pod {} to Node {}: {}", name, node_name, e);
+                        println!(
+                            "Failed to assign Pod {} to Node {}: error: {}",
+                            name, node_name, e
+                        );
                     }
                 }
-                println!("Successfully assigned Pod {} to Node {}", name, node_name,);
             }
-            _ => (),
+            _ => {
+                println!("Other event: {:?}, do nothing", status);
+            }
         }
     }
 

@@ -1,14 +1,16 @@
 [package]
 name = "k8s-scheduler-rs"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
-kube = { version = "0.97.0", features = ["runtime", "derive"] }
-tokio = { version = "1.43.0", features = ["full"] }
-serde = { version = "1.0.217", features = ["derive"] }
-serde_json = "1.0.137"
+kube = { version = "0.99.0", features = ["runtime", "derive"] }
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 reqwest = { version = "0.12.12", features = ["json"] }
 futures = "0.3"
-k8s-openapi = { version = "0.23.0", features = ["latest"] }
-anyhow = "1.0.95"
+k8s-openapi = { version = "0.24.0", features = ["latest"] }
+anyhow = "1.0.98"
+tracing = { version = "0.1.41", features = ["log"] }
+tracing-subscriber = "0.3.19"
