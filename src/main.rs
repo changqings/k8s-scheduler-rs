@@ -23,31 +23,53 @@ struct SchedulerConfig {
 impl Default for SchedulerConfig {
     fn default() -> Self {
         Self {
-            scheduler_name: "my-scheduler".to_string(),
+            scheduler_name: "my-scheduler-rs".to_string(),
             phase_pending: "Pending".to_string(),
         }
     }
 }
 
-fn get_config() -> SchedulerConfig {
-    SchedulerConfig::default()
-}
-
-fn get_better_node_name(nodes: Vec<String>) -> String {
-    let mut rng = rand::rng();
-    nodes.choose(&mut rng).unwrap().to_owned()
+impl SchedulerConfig {
+    pub fn new(scheduler_name: String, phase_pending: String) -> Self {
+        Self {
+            scheduler_name,
+            phase_pending,
+        }
+    }
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let config = get_config();
+    let matches = clap::Command::new("my-scheduler-rs")
+        .version("0.1")
+        .about("k8s scheduler impl in rust")
+        .arg(
+            clap::Arg::new("scheduler-name")
+                .long("name")
+                .short('n')
+                .default_value("my-scheduler")
+                .help("Name of the scheduler"),
+        )
+        .arg(
+            clap::Arg::new("node-label-selector")
+                .short('l')
+                .long("label")
+                .default_value("my-sheduler-node=test-1")
+                .help("Node label selector"),
+        )
+        .get_matches();
+
+    let scheduler_name = matches.get_one::<String>("scheduler-name").unwrap();
+    let node_labe = matches.get_one::<String>("node-label-selector").unwrap();
+
+    let config = SchedulerConfig::new(scheduler_name.to_owned(), "Pending".to_owned());
+    let node_label_selector = node_labe.to_owned();
 
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
     let client = Client::try_default().await?;
-
     let pods: Api<Pod> = Api::all(client.clone());
 
     let watch_fileds = format!(
@@ -65,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
                 let name = p.name_any();
                 println!("pod = {}, namespace = {}, Found pending pod", name, ns);
 
-                let nodes = get_node_names(client.clone()).await?;
+                let nodes = get_node_names(client.clone(), &node_label_selector).await?;
                 let node_name = get_better_node_name(nodes);
 
                 println!(
@@ -131,18 +153,23 @@ async fn bind_pod(
         .await
 }
 
-async fn get_node_names(client: Client) -> anyhow::Result<Vec<String>, anyhow::Error> {
-    let node_label = "my-scheduler-node=test-1";
-
+async fn get_node_names(
+    client: Client,
+    label_selector: &str,
+) -> anyhow::Result<Vec<String>, anyhow::Error> {
     let mut nodes_res = Vec::new();
     let nodes: Api<Node> = Api::all(client);
 
-    let mut list_p = ListParams::default();
-    list_p.label_selector = Some(node_label.to_string());
+    let list_p = ListParams::default().labels(label_selector);
 
     for node in nodes.list(&list_p).await?.items {
         nodes_res.push(node.metadata.name.unwrap());
     }
 
     Ok(nodes_res)
+}
+
+fn get_better_node_name(nodes: Vec<String>) -> String {
+    let mut rng = rand::rng();
+    nodes.choose(&mut rng).unwrap().to_owned()
 }

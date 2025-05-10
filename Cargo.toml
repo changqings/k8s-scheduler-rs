@@ -15,3 +15,4 @@ anyhow = "1.0.98"
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 rand = "0.9.1"
+clap = "4.5.37"
