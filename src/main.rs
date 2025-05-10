@@ -33,22 +33,6 @@ fn get_config() -> SchedulerConfig {
     SchedulerConfig::default()
 }
 
-async fn get_node_names() -> anyhow::Result<Vec<String>, anyhow::Error> {
-    let node_label = "my-scheduler-node=test-1";
-    let mut nodes_res = Vec::new();
-
-    let c = Client::try_default().await?;
-    let nodes: Api<Node> = Api::all(c.clone());
-    let mut list_p = ListParams::default();
-    list_p.label_selector = Some(node_label.to_string());
-
-    for node in nodes.list(&list_p).await?.items {
-        nodes_res.push(node.metadata.name.unwrap());
-    }
-
-    Ok(nodes_res)
-}
-
 fn get_better_node_name(nodes: Vec<String>) -> String {
     let mut rng = rand::rng();
     nodes.choose(&mut rng).unwrap().to_owned()
@@ -81,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
                 let name = p.name_any();
                 println!("pod = {}, namespace = {}, Found pending pod", name, ns);
 
-                let nodes = get_node_names().await?;
+                let nodes = get_node_names(client.clone()).await?;
                 let node_name = get_better_node_name(nodes);
 
                 println!(
@@ -145,4 +129,20 @@ async fn bind_pod(
             serde_json::to_vec(binding).unwrap(),
         )
         .await
+}
+
+async fn get_node_names(client: Client) -> anyhow::Result<Vec<String>, anyhow::Error> {
+    let node_label = "my-scheduler-node=test-1";
+
+    let mut nodes_res = Vec::new();
+    let nodes: Api<Node> = Api::all(client);
+
+    let mut list_p = ListParams::default();
+    list_p.label_selector = Some(node_label.to_string());
+
+    for node in nodes.list(&list_p).await?.items {
+        nodes_res.push(node.metadata.name.unwrap());
+    }
+
+    Ok(nodes_res)
 }
