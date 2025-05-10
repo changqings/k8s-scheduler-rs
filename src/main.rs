@@ -1,68 +1,104 @@
+use anyhow::Result;
 use futures::{StreamExt, TryStreamExt};
 use k8s_openapi::api::core::v1::Binding;
+use k8s_openapi::api::core::v1::Node;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Status;
 use kube::ResourceExt;
+use kube::api::ListParams;
 use kube::api::PostParams;
 use kube::api::WatchEvent;
 use kube::api::WatchParams;
 use kube::{Api, Client};
-use tracing_subscriber::FmtSubscriber;
+use tracing_subscriber::EnvFilter;
 
 use k8s_openapi::api::core::v1::Pod;
+use rand::prelude::*;
+
+#[derive(Clone, Debug)]
+struct SchedulerConfig {
+    scheduler_name: String,
+    phase_pending: String,
+}
+
+impl Default for SchedulerConfig {
+    fn default() -> Self {
+        Self {
+            scheduler_name: "my-scheduler".to_string(),
+            phase_pending: "Pending".to_string(),
+        }
+    }
+}
+
+fn get_config() -> SchedulerConfig {
+    SchedulerConfig::default()
+}
+
+async fn get_node_names() -> anyhow::Result<Vec<String>, anyhow::Error> {
+    let node_label = "my-scheduler-node=test-1";
+    let mut nodes_res = Vec::new();
+
+    let c = Client::try_default().await?;
+    let nodes: Api<Node> = Api::all(c.clone());
+    let mut list_p = ListParams::default();
+    list_p.label_selector = Some(node_label.to_string());
+
+    for node in nodes.list(&list_p).await?.items {
+        nodes_res.push(node.metadata.name.unwrap());
+    }
+
+    Ok(nodes_res)
+}
+
+fn get_better_node_name(nodes: Vec<String>) -> String {
+    let mut rng = rand::rng();
+    nodes.choose(&mut rng).unwrap().to_owned()
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(tracing::Level::DEBUG)
-        .finish();
+    let config = get_config();
 
-    tracing::subscriber::set_global_default(subscriber).expect("Failed to set subscriber");
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
 
     let client = Client::try_default().await?;
-    let k8s_scheduler_rs = "my-scheduler";
 
     let pods: Api<Pod> = Api::all(client.clone());
 
-    let watch_fileds = "status.phase=Pending,spec.schedulerName=".to_string() + k8s_scheduler_rs;
+    let watch_fileds = format!(
+        "status.phase={},spec.schedulerName={}",
+        config.phase_pending, config.scheduler_name
+    );
     let watch_params = WatchParams::default().fields(&watch_fileds);
 
     let mut stream = pods.watch(&watch_params, "0").await?.boxed();
 
-    let node_name = "xx";
     while let Some(status) = stream.try_next().await? {
         match status {
             WatchEvent::Added(p) => {
-                let ns = p.namespace().unwrap();
+                let ns = p.namespace().unwrap_or_default();
                 let name = p.name_any();
-                println!("Added: name={:?}, namespace={:?}", name, ns);
+                println!("pod = {}, namespace = {}, Found pending pod", name, ns);
+
+                let nodes = get_node_names().await?;
+                let node_name = get_better_node_name(nodes);
+
+                println!(
+                    "pod = {}, namespace = {}, node = {}, Assigning pod to node",
+                    name, ns, node_name
+                );
+
+                let binding = create_binding(&name, &node_name);
 
                 let pod_bind = Api::<Pod>::namespaced(client.clone(), &ns);
-
-                let binding = Binding {
-                    metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
-                        name: Some(name.clone()),
-                        ..Default::default()
-                    },
-                    target: k8s_openapi::api::core::v1::ObjectReference {
-                        kind: Some("Node".to_string()),
-                        name: Some(node_name.to_string()),
-                        ..Default::default()
-                    },
-                };
-
-                let res: Result<Status, kube::Error> = pod_bind
-                    .create_subresource(
-                        "binding",
-                        &name,
-                        &PostParams::default(),
-                        serde_json::to_vec(&binding)?,
-                    )
-                    .await;
-                match res {
+                match bind_pod(&pod_bind, &name, &binding).await {
                     Ok(s) => {
                         println!(
-                            "Successfully assigned Pod {} to Node {}, status={:?}",
-                            name, node_name, s.status
+                            "Successfully assigned Pod {} to Node {}, status={}",
+                            name,
+                            node_name,
+                            s.status.unwrap()
                         );
                     }
                     Err(e) => {
@@ -74,10 +110,39 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             _ => {
-                println!("Other event: {:?}, do nothing", status);
+                tracing::info!("Other event: {:?}, do nothing", status);
             }
         }
     }
 
     Ok(())
+}
+
+fn create_binding(name: &str, node_name: &str) -> Binding {
+    Binding {
+        metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+            name: Some(name.to_string()),
+            ..Default::default()
+        },
+        target: k8s_openapi::api::core::v1::ObjectReference {
+            kind: Some("Node".to_string()),
+            name: Some(node_name.to_string()),
+            ..Default::default()
+        },
+    }
+}
+
+async fn bind_pod(
+    pod_api: &Api<Pod>,
+    name: &str,
+    binding: &Binding,
+) -> Result<Status, kube::Error> {
+    pod_api
+        .create_subresource(
+            "binding",
+            name,
+            &PostParams::default(),
+            serde_json::to_vec(binding).unwrap(),
+        )
+        .await
 }
