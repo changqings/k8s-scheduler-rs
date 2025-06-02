@@ -9,6 +9,7 @@ use kube::api::PostParams;
 use kube::api::WatchEvent;
 use kube::api::WatchParams;
 use kube::{Api, Client};
+use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 
 use k8s_openapi::api::core::v1::Pod;
@@ -54,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
             clap::Arg::new("node-label-selector")
                 .short('l')
                 .long("label")
-                .default_value("my-sheduler-node=test-1")
+                .default_value("my-scheduler-node=test-1")
                 .help("Node label selector"),
         )
         .get_matches();
@@ -66,7 +67,11 @@ async fn main() -> anyhow::Result<()> {
     let node_label_selector = node_labe.to_owned();
 
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
+        )
         .init();
 
     let client = Client::try_default().await?;
@@ -85,13 +90,13 @@ async fn main() -> anyhow::Result<()> {
             WatchEvent::Added(p) => {
                 let ns = p.namespace().unwrap_or_default();
                 let name = p.name_any();
-                println!("pod = {}, namespace = {}, Found pending pod", name, ns);
+                println!("Found pending pod, name={}, namespace={}", name, ns);
 
                 let nodes = get_node_names(client.clone(), &node_label_selector).await?;
                 let node_name = get_better_node_name(nodes);
 
                 println!(
-                    "pod = {}, namespace = {}, node = {}, Assigning pod to node",
+                    "Bindding pod, name={}, namespace={}, node={}",
                     name, ns, node_name
                 );
 
@@ -116,7 +121,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             _ => {
-                tracing::info!("Other event: {:?}, do nothing", status);
+                tracing::debug!("Other event: {:?}, do nothing", status);
             }
         }
     }
@@ -165,7 +170,9 @@ async fn get_node_names(
     for node in nodes.list(&list_p).await?.items {
         nodes_res.push(node.metadata.name.unwrap());
     }
-
+    if nodes_res.len() == 0 {
+        return Err(anyhow::anyhow!("No nodes found"));
+    }
     Ok(nodes_res)
 }
 
